@@ -67,7 +67,19 @@ func qMsg(s string, w []string) (msg *discordgo.MessageEmbed) {
 	}
 
 	msg = &discordgo.MessageEmbed{
-		Description: "queue:\n-----------------------------------------\nnow speaking: " + idToMention(s) + "\nwaiting: " + strings.Join(wm, "\n    "),
+		Title: "Queue:",
+		Fields: []*discordgo.MessageEmbedField{
+			&discordgo.MessageEmbedField{
+				Name:   "Now Speaking:",
+				Value:  idToMention(s),
+				Inline: false,
+			},
+			&discordgo.MessageEmbedField{
+				Name:   "Waiting:",
+				Value:  strings.Join(wm, "\n"),
+				Inline: false,
+			},
+		},
 	}
 
 	return
@@ -76,7 +88,7 @@ func qMsg(s string, w []string) (msg *discordgo.MessageEmbed) {
 func queue(args []string, msg *discordgo.MessageCreate, channel string, s *discordgo.Session) {
 	if len(args) == 0 {
 		if len(q) == 0 {
-			s.ChannelMessageSend(channel, "nothing in the queue yet! type `.q add` to add yourself to the queue.")
+			s.ChannelMessageSend(channel, "Nothing in the queue yet! Type `.q add` to add yourself to the queue.")
 			return
 		} else {
 			s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
@@ -91,16 +103,16 @@ func queue(args []string, msg *discordgo.MessageCreate, channel string, s *disco
 			q = append(q, msg.Author.ID)
 		}
 		e := &discordgo.MessageEmbed{
-			Title:       "added!",
-			Description: idToMention(msg.Author.ID) + " has been added to the waiting list",
+			Title:       "Added!",
+			Description: idToMention(msg.Author.ID) + " has been added to the waiting list.",
 		}
 		s.ChannelMessageSendEmbed(channel, e)
 		s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
 	case "next", "pop":
 		q = q[1:]
 		e := &discordgo.MessageEmbed{
-			Title:       "popped the stack!",
-			Description: idToMention(q[0]) + " is now the speaker",
+			Title:       "Popped the stack!",
+			Description: idToMention(q[0]) + " is now the speaker.",
 		}
 		s.ChannelMessageSendEmbed(channel, e)
 		s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
@@ -151,7 +163,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		s.ChannelMessageSend(m.ChannelID, words)
 	case "timer":
 		s.ChannelMessageSend(m.ChannelID, "`to be implemented`")
-	case "q":
+	case "q", "queue":
 		queue(args, m, m.ChannelID, s)
 	case "help":
 		s.ChannelMessageSend(m.ChannelID, "`to be implemented`")
