@@ -13,13 +13,16 @@ import (
 
 // Variables used for command line parameters
 var (
-	Token string
+	Token   string
+	GuildID string
 )
+
 var q []string
 
 func init() {
 
 	flag.StringVar(&Token, "t", "", "Bot Token")
+	flag.StringVar(&GuildID, "g", "", "Guild in which voice channel exists")
 	flag.Parse()
 }
 
@@ -36,7 +39,7 @@ func main() {
 	dg.AddHandler(messageCreate)
 
 	// In this example, we only care about receiving message events.
-	dg.Identify.Intents = discordgo.IntentsGuildMessages
+	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuildMembers
 
 	// Open a websocket connection to Discord and begin listening.
 	err = dg.Open()
@@ -62,8 +65,12 @@ func idToMention(id string) (mention string) {
 
 func qMsg(s string, w []string) (msg *discordgo.MessageEmbed) {
 	var wm []string
-	for _, id := range w {
-		wm = append(wm, idToMention(id))
+	if len(w) == 0 {
+		wm = append(wm, "No one yet!")
+	} else {
+		for _, id := range w {
+			wm = append(wm, idToMention(id))
+		}
 	}
 
 	msg = &discordgo.MessageEmbed{
@@ -86,9 +93,13 @@ func qMsg(s string, w []string) (msg *discordgo.MessageEmbed) {
 }
 
 func queue(args []string, msg *discordgo.MessageCreate, channel string, s *discordgo.Session) {
+	guildMembers, err := s.GuildMembers(GuildID, "0", 1000)
+	if err != nil {
+		fmt.Println(err)
+	}
 	if len(args) == 0 {
 		if len(q) == 0 {
-			s.ChannelMessageSend(channel, "Nothing in the queue yet! Type `.q add` to add yourself to the queue.")
+			s.ChannelMessageSend(channel, "No one in the queue yet! Type `.q add` to add yourself to the queue.")
 			return
 		} else {
 			s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
@@ -96,20 +107,49 @@ func queue(args []string, msg *discordgo.MessageCreate, channel string, s *disco
 		}
 	}
 	queueCmd := args[0]
-	queueArgs := args[1:]
+	// queueArgs := args[1:]
 	switch queueCmd {
 	case "add", "+":
-		if len(queueArgs) == 0 {
-			q = append(q, msg.Author.ID)
+		q = append(q, msg.Author.ID)
+
+		if len(q) == 1 {
+			for i, member := range guildMembers {
+				s.GuildMemberMute(GuildID, member.User.ID, true)
+			}
+			s.GuildMemberMute(GuildID, msg.Author.ID, false)
 		}
+
 		e := &discordgo.MessageEmbed{
 			Title:       "Added!",
-			Description: idToMention(msg.Author.ID) + " has been added to the waiting list.",
+			Description: idToMention(msg.Author.ID) + " has been added to the queue.",
 		}
 		s.ChannelMessageSendEmbed(channel, e)
 		s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
 	case "next", "pop":
+		fmt.Printf("%v", len(q))
+		if len(q) == 1 {
+			q = q[1:]
+			for _, member := range guildMembers {
+				s.GuildMemberMute(GuildID, member.User.ID, false)
+			}
+			e := &discordgo.MessageEmbed{
+				Title:       "No one else in queue!",
+				Description: "Unmuted everyone. Type `.q add` to restart the queue.",
+			}
+			s.ChannelMessageSendEmbed(channel, e)
+			return
+		} else if len(q) == 0 {
+			e := &discordgo.MessageEmbed{
+				Title:       "No one in queue!",
+				Description: "Type `.q add` to add yourself to the queue.",
+			}
+			s.ChannelMessageSendEmbed(channel, e)
+			return
+		}
+		s.GuildMemberMute(GuildID, q[0], true)
 		q = q[1:]
+		s.GuildMemberMute(GuildID, q[0], false)
+
 		e := &discordgo.MessageEmbed{
 			Title:       "Popped the stack!",
 			Description: idToMention(q[0]) + " is now the speaker.",
