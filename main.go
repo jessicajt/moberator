@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,14 +16,16 @@ import (
 var (
 	Token   string
 	GuildID string
+	HostID  string
 )
 
-var q []string
+var q []*discordgo.User
 
 func init() {
 
 	flag.StringVar(&Token, "t", "", "Bot Token")
 	flag.StringVar(&GuildID, "g", "", "Guild in which voice channel exists")
+	flag.StringVar(&HostID, "h", "", "Host of the mob session")
 	flag.Parse()
 }
 
@@ -58,18 +61,24 @@ func main() {
 	dg.Close()
 }
 
+func remove(slice []*discordgo.User, pos int) (newslice []*discordgo.User) {
+	newslice = append(slice[:pos], slice[pos+1:]...)
+	return
+}
+
 func idToMention(id string) (mention string) {
 	mention = "<@" + id + ">"
 	return
 }
 
-func qMsg(s string, w []string) (msg *discordgo.MessageEmbed) {
+func qMsg(s *discordgo.User, w []*discordgo.User) (msg *discordgo.MessageEmbed) {
 	var wm []string
 	if len(w) == 0 {
 		wm = append(wm, "No one yet!")
 	} else {
-		for _, id := range w {
-			wm = append(wm, idToMention(id))
+		for i, user := range w {
+			pos := strconv.Itoa(i + 1)
+			wm = append(wm, pos+". "+idToMention(user.ID))
 		}
 	}
 
@@ -78,7 +87,7 @@ func qMsg(s string, w []string) (msg *discordgo.MessageEmbed) {
 		Fields: []*discordgo.MessageEmbedField{
 			&discordgo.MessageEmbedField{
 				Name:   "Now Speaking:",
-				Value:  idToMention(s),
+				Value:  idToMention(s.ID),
 				Inline: false,
 			},
 			&discordgo.MessageEmbedField{
@@ -99,7 +108,11 @@ func queue(args []string, msg *discordgo.MessageCreate, channel string, s *disco
 	}
 	if len(args) == 0 {
 		if len(q) == 0 {
-			s.ChannelMessageSend(channel, "No one in the queue yet! Type `.q add` to add yourself to the queue.")
+			e := &discordgo.MessageEmbed{
+				Title:       "No one in the queue yet!",
+				Description: "Type `.q add` to add yourself to the queue.",
+			}
+			s.ChannelMessageSendEmbed(channel, e)
 			return
 		} else {
 			s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
@@ -107,14 +120,19 @@ func queue(args []string, msg *discordgo.MessageCreate, channel string, s *disco
 		}
 	}
 	queueCmd := args[0]
-	// queueArgs := args[1:]
+	queueArgs := args[1:]
 	switch queueCmd {
 	case "add", "+":
-		q = append(q, msg.Author.ID)
+		q = append(q, msg.Author)
 
 		if len(q) == 1 {
-			for i, member := range guildMembers {
-				s.GuildMemberMute(GuildID, member.User.ID, true)
+			for _, member := range guildMembers {
+				fmt.Println("did .q add")
+				err := s.GuildMemberMute(GuildID, member.User.ID, true)
+				if err != nil {
+					fmt.Println(err)
+				}
+				//time.Sleep(1 * time.Second)
 			}
 			s.GuildMemberMute(GuildID, msg.Author.ID, false)
 		}
@@ -126,36 +144,70 @@ func queue(args []string, msg *discordgo.MessageCreate, channel string, s *disco
 		s.ChannelMessageSendEmbed(channel, e)
 		s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
 	case "next", "pop":
-		fmt.Printf("%v", len(q))
-		if len(q) == 1 {
+		if msg.Author.ID == HostID || msg.Author == q[0] {
+			fmt.Printf("%v", len(q))
+			if len(q) == 1 {
+				q = q[1:]
+				for _, member := range guildMembers {
+					s.GuildMemberMute(GuildID, member.User.ID, false)
+				}
+				e := &discordgo.MessageEmbed{
+					Title:       "No one else in queue!",
+					Description: "Unmuted everyone. Type `.q add` to restart the queue.",
+				}
+				s.ChannelMessageSendEmbed(channel, e)
+				return
+			} else if len(q) == 0 {
+				e := &discordgo.MessageEmbed{
+					Title:       "No one in queue!",
+					Description: "Type `.q add` to add yourself to the queue.",
+				}
+				s.ChannelMessageSendEmbed(channel, e)
+				return
+			}
+			s.GuildMemberMute(GuildID, q[0].ID, true)
 			q = q[1:]
-			for _, member := range guildMembers {
-				s.GuildMemberMute(GuildID, member.User.ID, false)
-			}
-			e := &discordgo.MessageEmbed{
-				Title:       "No one else in queue!",
-				Description: "Unmuted everyone. Type `.q add` to restart the queue.",
-			}
-			s.ChannelMessageSendEmbed(channel, e)
-			return
-		} else if len(q) == 0 {
-			e := &discordgo.MessageEmbed{
-				Title:       "No one in queue!",
-				Description: "Type `.q add` to add yourself to the queue.",
-			}
-			s.ChannelMessageSendEmbed(channel, e)
-			return
-		}
-		s.GuildMemberMute(GuildID, q[0], true)
-		q = q[1:]
-		s.GuildMemberMute(GuildID, q[0], false)
+			s.GuildMemberMute(GuildID, q[0].ID, false)
 
-		e := &discordgo.MessageEmbed{
-			Title:       "Popped the stack!",
-			Description: idToMention(q[0]) + " is now the speaker.",
+			e := &discordgo.MessageEmbed{
+				Title:       "Popped the stack!",
+				Description: idToMention(q[0].ID) + " is now the speaker.",
+			}
+			s.ChannelMessageSendEmbed(channel, e)
+			s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
+		} else {
+			e := &discordgo.MessageEmbed{
+				Title:       "Oops, that didn't work.",
+				Description: "Only the current speaker (" + idToMention(q[0].ID) + ") or the session host(" + idToMention(HostID) + ") can run `.q next`.",
+			}
+			s.ChannelMessageSendEmbed(channel, e)
 		}
-		s.ChannelMessageSendEmbed(channel, e)
-		s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
+	case "remove", "rm":
+		positionInt, err := strconv.Atoi(queueArgs[0])
+		if msg.Author.ID == HostID || msg.Author == q[positionInt] {
+			if err != nil {
+				e := &discordgo.MessageEmbed{
+					Title:       "Oops, that didn't work.",
+					Description: "Please enter a valid integer position.",
+				}
+				s.ChannelMessageSendEmbed(channel, e)
+			} else {
+				removed := q[positionInt]
+				q = remove(q, positionInt)
+				e := &discordgo.MessageEmbed{
+					Title:       "Removed " + removed.Username + " from the queue!",
+					Description: idToMention(q[positionInt].ID) + " is now at position " + queueArgs[0],
+				}
+				s.ChannelMessageSendEmbed(channel, e)
+				s.ChannelMessageSendEmbed(channel, qMsg(q[0], q[1:]))
+			}
+		} else {
+			e := &discordgo.MessageEmbed{
+				Title:       "Oops, that didn't work.",
+				Description: "Only the session host (" + idToMention(HostID) + ") or the person to be removed can run `.q remove`.",
+			}
+			s.ChannelMessageSendEmbed(channel, e)
+		}
 	default:
 		s.ChannelMessageSend(channel, "Type `.help` for a list of valid commands.")
 	}
